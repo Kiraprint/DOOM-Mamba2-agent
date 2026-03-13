@@ -1,0 +1,2 @@
+# Sample-Factory + VizDoom (use in a separate venv; conflicts with main project deps)
+sample-factory[vizdoom]

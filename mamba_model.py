@@ -36,7 +36,7 @@ class SSDMamba2Combatant(nn.Module):
         tokens = self.cnn(x).view(b, s, -1)
 
         # Process through Mamba layers with residual connections
-        for mamba, ln in zip(self.mamba_layers, self.layer_norms):
+        for mamba, ln in zip(self.mamba_layers, self.layer_norms, strict=False):
             tokens = tokens + mamba(ln(tokens))  # Pre-norm residual
 
         latent = tokens.mean(dim=1)

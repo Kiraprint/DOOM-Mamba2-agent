@@ -15,3 +15,5 @@ _vizdoom.ini
 *.pth
 
 images/
+.venv_sf/
+train_dir/

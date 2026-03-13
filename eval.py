@@ -89,9 +89,26 @@ class CombatActionWrapper(gym.ActionWrapper):
         return new_action[self.button_indices].copy()
 
 
+class ActionRepeatWrapper(gym.Wrapper):
+    """Repeat each action for N frames (match training for DefendCenter/DefendLine)."""
+
+    def __init__(self, env, repeat: int = 4):
+        super().__init__(env)
+        self.repeat = repeat
+
+    def step(self, action):
+        total_reward = 0.0
+        for _ in range(self.repeat):
+            obs, reward, term, trunc, info = self.env.step(action)
+            total_reward += reward
+            if term or trunc:
+                break
+        return obs, total_reward, term, trunc, info
+
+
 # 1. Re-initialize Environment with Rendering
 def make_eval_env(env_id):
-    """Create eval environment. Uses -MultiBinary-v1 and scenario button subset."""
+    """Create eval environment. DefendCenter/DefendLine use action-repeat like in training."""
     gym_id = GYM_ENV_IDS.get(env_id, "VizdoomCorridor-MultiBinary-v1")
     indices = SCENARIO_BUTTON_INDICES.get(env_id, list(range(7)))
     env = gym.make(gym_id, render_mode="human")
@@ -100,6 +117,8 @@ def make_eval_env(env_id):
     env = gym.wrappers.GrayscaleObservation(env, keep_dim=True)
     env = gym.wrappers.FrameStackObservation(env, 4)
     env = CombatActionWrapper(env, button_indices=indices)
+    if env_id in ("VizdoomDefendCenter-v1", "VizdoomDefendLine-v1"):
+        env = ActionRepeatWrapper(env, repeat=4)
     return env
 
 
