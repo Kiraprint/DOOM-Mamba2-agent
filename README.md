@@ -211,9 +211,9 @@ values, including `seed: null`, are in the released `config.json`.)
 - **The HPO trials are not published.** 168 trial directories (50 mamba3, 50 gru,
   3 mamba2, 65 legacy `hpo_<N>_` trials) at 10.03M frames are counted as excluded
   in `CLUSTER_RESULTS.md` rather than reported. 20 runs under 10M frames are
-  smokes, 18 crashed before logging a reward, 2 restarted mid-run (published with
-  frames and wall clock but no reward), 1 never stepped its env and is quarantined,
-  and 0 are unclassified.
+  smokes, 15 crashed before logging a reward, 5 held several sessions in one
+  log (published with frames and summed wall clock but no reward), 1 never stepped
+  its env and is quarantined, and 0 are unclassified.
 
 ## Repo layout
 

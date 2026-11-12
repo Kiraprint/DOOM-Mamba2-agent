@@ -55,6 +55,7 @@ RE_COLLECTED = re.compile(r"Collected \{0: (\d+)\}, FPS: ([\d.]+)")
 RE_COLLECTED_TS = re.compile(
     r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+\].*Collected \{0: (\d+)\}, FPS: ([\d.]+)")
 RE_TOTAL_FRAMES = re.compile(r"Total num frames: (\d+)")
+RE_LINE_TS = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+)\]")
 RE_DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
 
 # run directory -> arm. Explicit on purpose: this mapping, not the directory name,
@@ -127,7 +128,8 @@ def read_config(run_dir):
     if not os.path.exists(path):
         return {}
     try:
-        return json.load(open(path))
+        with open(path) as f:
+            return json.load(f)
     except ValueError:
         return {}
 
@@ -135,34 +137,56 @@ def read_config(run_dir):
 def parse_log(path):
     """(series, frames, max_total_frames, fps, wall_h, sessions) for one sf_log.txt.
 
-    Two things here are not obvious and both were got wrong first:
+    Three things here are not obvious and each was got wrong first:
 
-    * a restarted run appends a second session to the same log, so the *last*
-      `Collected {0: N}` line can be smaller than an earlier one. Frames reached is
-      therefore the largest `Collected` value, not the last -- reading the last one
-      filed two runs that had already completed a 50M budget as "under 10M frames";
-    * the wall clock of such a run is the sum of its sessions, which is why the
-      timestamps are split at every backwards jump in `Collected` (naive
-      first-to-last subtraction produced negative hours).
+    * a log can hold more than one training session. The HPO driver appended every
+      relaunch to the first trial's log, so `m3_trial_1` records three launches and
+      `m3_trial_4` four -- and each launch writes its config into a *different*
+      `train_dir`, so the file is a concatenation of separate runs;
+    * a session boundary is one of those relaunches (`Saving configuration to ...`,
+      which every Sample Factory launch prints first), never a backwards step in
+      `Collected`: a relaunch whose first `Collected` repeats the previous value, or
+      one that logs no `Collected` at all, leaves no trace in that series;
+    * therefore frames reached is the largest `Collected` value over the whole log
+      (a restarted log's last one can be smaller -- reading it filed two runs that
+      had completed a 50M budget as "under 10M frames"), and the wall clock is the
+      *sum* of the per-session spans. The naive first-to-last subtraction crosses
+      gaps between relaunches and produced negative hours.
     """
-    text = open(path, errors="replace").read()
+    with open(path, errors="replace") as f:
+        text = f.read()
     series = [(ts, float(v)) for ts, v in RE_AVG.findall(text)]
-    stamps = [ts for ts, _ in series]
     events = [(ts, int(fr), float(rate)) for ts, fr, rate in RE_COLLECTED_TS.findall(text)]
     totals = [int(v) for v in RE_TOTAL_FRAMES.findall(text)]
 
     frames = max((fr for _, fr, _ in events), default=None)
-    rate = events[-1][2] if events else None
+    # FPS belongs to the sample that produced the frame count, not to the last line.
+    rate = None
+    for _, fr, r in events:
+        if fr == frames:
+            rate = r
 
+    lines = text.splitlines()
+    markers = [i for i, line in enumerate(lines)
+               if "Saving configuration to" in line and RE_LINE_TS.match(line)]
     sessions = []
-    if stamps:
-        start, prev = stamps[0], None
-        for ts, fr, _ in events:
-            if prev is not None and fr < prev:
-                sessions.append((start, ts))
-                start = ts
-            prev = fr
-        sessions.append((start, stamps[-1]))
+    for k, first in enumerate(markers):
+        last = markers[k + 1] - 1 if k + 1 < len(markers) else len(lines) - 1
+        start = RE_LINE_TS.match(lines[first]).group(1)
+        end = start
+        for j in range(last, first - 1, -1):
+            m = RE_LINE_TS.match(lines[j])
+            if m:
+                end = m.group(1)
+                break
+        sessions.append((start, end))
+    if not sessions:
+        stamps_all = [m.group(1) for m in
+                      (RE_LINE_TS.match(line) for line in lines) if m]
+        if stamps_all:
+            sessions = [(stamps_all[0], stamps_all[-1])]
+
+    if sessions:
         wall = round(sum((datetime.fromisoformat(b) - datetime.fromisoformat(a)
                           ).total_seconds() for a, b in sessions) / 3600.0, 2)
     else:
@@ -198,8 +222,9 @@ def classify(name, points, frames, budget, sessions=1):
 
 
 def is_finished(frames, budget):
-    return (frames is not None and budget is not None
-            and frames >= BUDGET_SATISFIED * budget)
+    if frames is None or budget is None or budget == "":
+        return False
+    return frames >= BUDGET_SATISFIED * budget
 
 
 def code_signature(diff_text):
@@ -272,7 +297,7 @@ def collect(train_dir):
             last20=round(exact, 2) if values and sessions < 2 else "",
             final=round(values[-1], 2) if values and sessions < 2 else "",
             best=round(max(values), 2) if values and sessions < 2 else "",
-            fps=fps if fps is not None else "",
+            fps=fps if fps is not None and sessions < 2 else "",
             wall_h=wall if wall is not None else "",
             collapsed="yes" if (meta.get("collapsed") or single.get("collapsed")) else "",
             rnn_type=conf.get("rnn_type") or "",
@@ -308,6 +333,10 @@ def validate(rows, train_dir):
                 "%s is unclassified: %s frames reached, budget %s -- add it to "
                 "MANIFEST or SINGLE, or quarantine it in BROKEN"
                 % (r["run"], r["frames_reached"] or "no", r["budget"] or "unknown"))
+        if r["budget"] == "":
+            problems.append(
+                "%s has no readable train_for_env_steps in its config.json, so its "
+                "budget cannot be checked and its bucket is a guess" % r["run"])
         if r["group"] in ("reported", "single") and not is_finished(
                 r["frames_reached"], r["budget"]):
             problems.append(
@@ -427,8 +456,9 @@ def render_markdown(rows, train_dir, dir_count, date):
         "the frame counts behind each bucket.",
         "",
         "Bucketing comes from the logs, never from directory names: `frames reached`",
-        "is the run's last `Collected {0: N}` line (or its largest `Total num",
-        "frames: N` when that line is missing) and its budget is",
+        "is the largest `Collected {0: N}` line in the log (or its largest `Total num",
+        "frames: N` when that line is missing) -- never the last one, because a log",
+        "that holds a relaunch can end with a smaller count -- and its budget is",
         "`train_for_env_steps` from its own `config.json`. A run counts as finished",
         "at 99% of that budget. `seed` in `results/runs.csv` is the `seed` field of",
         "`config.json` and is blank where the run did not record one -- the runs are",
@@ -515,13 +545,17 @@ def render_markdown(rows, train_dir, dir_count, date):
     if restarted:
         out += [
             "",
-            "## Restarted runs (two sessions in one log)",
+            "## Restarted runs (several training sessions in one log)",
             "",
-            "The log of each of these holds a first session and a second one appended",
-            "after a restart, so the reward series spans two training runs and no",
-            "`last20` is printed. Frames reached is the largest `Collected` value (the",
-            "earlier session got through a full budget) and the wall clock is the sum of",
-            "the sessions, which is why a naive first-to-last subtraction goes negative here.",
+            "The HPO driver appended each relaunch to the first trial's log, and every",
+            "relaunch wrote its config into a *different* `train_dir` -- so one file here",
+            "holds several separate runs and no `last20` over it means anything. Sessions",
+            "are counted from the `Saving configuration to ...` line each launch prints,",
+            "not from a backwards step in `Collected`: a relaunch that repeats the",
+            "previous count leaves no trace in that series. Frames reached is the largest",
+            "`Collected` value, and the wall clock is the **sum of the per-session spans**",
+            "-- a first-to-last subtraction crosses the gaps between relaunches and comes",
+            "out negative here.",
             "",
             "| run | sessions | frames reached | budget | wall h | code | source |",
             "|---|---|---|---|---|---|---|",
@@ -544,9 +578,9 @@ def render_markdown(rows, train_dir, dir_count, date):
             hpo["mamba3"], hpo["gru"], hpo["mamba2"], hpo["numbered"]),
         "| `smoke` | %d | under %dM frames |" % (
             counts.get("smoke", 0), SMOKE_FRAMES // 1_000_000),
-        "| `no_series` | %d | crashed or restarted before logging a reward |" % counts.get("no_series", 0),
-        "| `restarted` | %d | two sessions in one log; published separately above, no "
-        "reward statistic |" % counts.get("restarted", 0),
+        "| `no_series` | %d | crashed before logging a reward |" % counts.get("no_series", 0),
+        "| `restarted` | %d | several training sessions in one log; published separately "
+        "above, no reward statistic |" % counts.get("restarted", 0),
         "| `no_log` | %d | directory has a `config.json` but no `sf_log.txt`: %s |" % (
             len(no_log), ", ".join("`%s`" % n for n in no_log) or "none"),
         "| `unclassified` | %d | empty by construction: the script exits nonzero if a run "
