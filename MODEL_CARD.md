@@ -55,8 +55,9 @@ on Linux, and `ffmpeg` on PATH if you record video. The script pins
 `weights_only`, and torch >= 2.6 then refuses this checkpoint and reports it as
 `'NoneType' object is not subscriptable`.
 
-Recorded episodes from this checkpoint scored 30.0, 27.0 and 20.0 — those are
-single episodes on the training distribution, not a held-out evaluation.
+Recorded episodes from this checkpoint scored 30.0, 32.0 and 22.0 (the three
+clips in the GitHub repo's `media/`) — single episodes on the training
+distribution, not a held-out evaluation, and not comparable to `last20`.
 
 ## Limitations
 

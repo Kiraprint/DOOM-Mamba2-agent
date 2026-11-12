@@ -52,6 +52,8 @@ RE_AVG = re.compile(
     r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+\].*Avg episode reward: \[\(0, '(-?\d+\.?\d*)'\)\]"
 )
 RE_COLLECTED = re.compile(r"Collected \{0: (\d+)\}, FPS: ([\d.]+)")
+RE_COLLECTED_TS = re.compile(
+    r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),\d+\].*Collected \{0: (\d+)\}, FPS: ([\d.]+)")
 RE_TOTAL_FRAMES = re.compile(r"Total num frames: (\d+)")
 RE_DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
 
@@ -131,31 +133,51 @@ def read_config(run_dir):
 
 
 def parse_log(path):
-    """(series, collected, max_total_frames, fps, wall_h) for one sf_log.txt.
+    """(series, frames, max_total_frames, fps, wall_h, sessions) for one sf_log.txt.
 
-    `collected` is the last `Collected {0: N}` frame count (one session), kept
-    apart from the largest `Total num frames: N` (which accumulates across a
-    restart). `Samples:` is deliberately not used as a frame count: it is a
-    different unit.
+    Two things here are not obvious and both were got wrong first:
+
+    * a restarted run appends a second session to the same log, so the *last*
+      `Collected {0: N}` line can be smaller than an earlier one. Frames reached is
+      therefore the largest `Collected` value, not the last -- reading the last one
+      filed two runs that had already completed a 50M budget as "under 10M frames";
+    * the wall clock of such a run is the sum of its sessions, which is why the
+      timestamps are split at every backwards jump in `Collected` (naive
+      first-to-last subtraction produced negative hours).
     """
     text = open(path, errors="replace").read()
     series = [(ts, float(v)) for ts, v in RE_AVG.findall(text)]
     stamps = [ts for ts, _ in series]
-    collected = RE_COLLECTED.findall(text)
+    events = [(ts, int(fr), float(rate)) for ts, fr, rate in RE_COLLECTED_TS.findall(text)]
     totals = [int(v) for v in RE_TOTAL_FRAMES.findall(text)]
-    steps = int(collected[-1][0]) if collected else None
-    rate = float(collected[-1][1]) if collected else None
-    wall = None
-    if len(stamps) > 1:
-        t0 = datetime.fromisoformat(stamps[0])
-        t1 = datetime.fromisoformat(stamps[-1])
-        wall = round((t1 - t0).total_seconds() / 3600.0, 2)
-    return series, steps, (max(totals) if totals else None), rate, wall
+
+    frames = max((fr for _, fr, _ in events), default=None)
+    rate = events[-1][2] if events else None
+
+    sessions = []
+    if stamps:
+        start, prev = stamps[0], None
+        for ts, fr, _ in events:
+            if prev is not None and fr < prev:
+                sessions.append((start, ts))
+                start = ts
+            prev = fr
+        sessions.append((start, stamps[-1]))
+        wall = round(sum((datetime.fromisoformat(b) - datetime.fromisoformat(a)
+                          ).total_seconds() for a, b in sessions) / 3600.0, 2)
+    else:
+        wall = None
+    return series, frames, (max(totals) if totals else None), rate, wall, len(sessions)
 
 
-def classify(name, points, frames, budget):
+def classify(name, points, frames, budget, sessions=1):
     if name in BROKEN:
         return "broken"
+    if name not in MANIFEST and sessions > 1:
+        # A second session in the same log means the reward series spans two
+        # training runs: no statistic over it means anything, so it is counted as
+        # restarted rather than published as a result.
+        return "restarted"
     if name in MANIFEST:
         return "reported"
     if name in SINGLE:
@@ -225,7 +247,7 @@ def collect(train_dir):
     for path in sorted(glob.glob(os.path.join(train_dir, "*", "sf_log.txt"))):
         name = os.path.basename(os.path.dirname(path))
         run_dir = os.path.dirname(path)
-        series, steps, max_frames, fps, wall = parse_log(path)
+        series, steps, max_frames, fps, wall, sessions = parse_log(path)
         conf = read_config(run_dir)
         values = [v for _, v in series]
         frames = steps if steps is not None else max_frames
@@ -235,7 +257,8 @@ def collect(train_dir):
         exact = statistics.mean(values[-20:]) if values else ""
         row = dict(
             run=name,
-            group=classify(name, len(values), frames, budget),
+            group=classify(name, len(values), frames, budget, sessions),
+            sessions=sessions,
             arm=meta.get("arm") or PARTIAL.get(name) or single.get("arm", ""),
             scale=meta.get("scale") or single.get("scale")
             or ("50M" if name in PARTIAL else ""),
@@ -246,9 +269,9 @@ def collect(train_dir):
             collected_frames=_int_or_blank(steps),
             frames_reached=_int_or_blank(frames),
             budget=budget,
-            last20=round(exact, 2) if values else "",
-            final=round(values[-1], 2) if values else "",
-            best=round(max(values), 2) if values else "",
+            last20=round(exact, 2) if values and sessions < 2 else "",
+            final=round(values[-1], 2) if values and sessions < 2 else "",
+            best=round(max(values), 2) if values and sessions < 2 else "",
             fps=fps if fps is not None else "",
             wall_h=wall if wall is not None else "",
             collapsed="yes" if (meta.get("collapsed") or single.get("collapsed")) else "",
@@ -285,6 +308,15 @@ def validate(rows, train_dir):
                 "%s is unclassified: %s frames reached, budget %s -- add it to "
                 "MANIFEST or SINGLE, or quarantine it in BROKEN"
                 % (r["run"], r["frames_reached"] or "no", r["budget"] or "unknown"))
+        if r["group"] in ("reported", "single") and not is_finished(
+                r["frames_reached"], r["budget"]):
+            problems.append(
+                "%s is filed as a headline run but reached %s of %s frames: a "
+                "headline row must have finished its budget, otherwise it is a "
+                "partial run" % (r["run"], r["frames_reached"], r["budget"]))
+        if r["group"] in ("reported", "single") and r["sessions"] > 1:
+            problems.append("%s is filed as a headline run but its log holds %d "
+                            "sessions" % (r["run"], r["sessions"]))
         if r["group"] in ("reported", "single") and r["frames_reached"] == 0:
             problems.append("%s is filed as a headline run but collected 0 frames: "
                             "quarantine it in BROKEN" % r["run"])
@@ -414,12 +446,13 @@ def render_markdown(rows, train_dir, dir_count, date):
         "flattened size (mamba3 16960 = d_model 256 / d_state 64, mamba3 66688 =",
         "512 / 128).",
         "",
-        "Where the code lives: the campaign ran in the `DOOM` repository. Most runs",
-        "are on its `master` (1fa02f7), the GDN runs on `cluster/gdn` (fad9545, pushed",
-        "pinned so the core is not only on the cluster). The uncommitted working-tree",
-        "patch those runs shared is committed here as",
-        "`results/working_tree_1fa02f7.diff` -- without it the per-run `git.diff` files,",
-        "which are the only exact code record, cannot be reconstructed from the repo.",
+        "Where the code lives: the campaign ran in the `DOOM` repository from a dirty",
+        "`1fa02f7` checkout (and `fad9545` for the GDN runs, pinned here as branch",
+        "`cluster/gdn`). The checkout was edited between batches, so there is no single",
+        "working-tree patch: every distinct state is published as",
+        "`results/code_states/<signature>.diff`, and the table below says which runs",
+        "came from it. The `DOOM` repository alone cannot reproduce these numbers --",
+        "the signatures differ from its `master`.",
         "",
         "## 50M env frames",
         "",
@@ -454,6 +487,50 @@ def render_markdown(rows, train_dir, dir_count, date):
             "",
         ]
         out += render_table(partial, aggregate=False)
+    states = {}
+    for r in rows:
+        if r["diff_md5"]:
+            states.setdefault(r["diff_md5"], {"runs": [], "git": r["git_hash"]})
+            states[r["diff_md5"]]["runs"].append(r["run"])
+    if states:
+        out += [
+            "",
+            "## Code states (one patch per distinct working tree)",
+            "",
+            "Derived from each run's own `git.diff`, with the engine-generated",
+            "`_vizdoom.ini` hunk removed so a launch timestamp cannot split one state",
+            "into two. Each patch is committed as `results/code_states/<signature>.diff`.",
+            "A signature shared by many runs means the same code with different",
+            "arguments -- never that they are replicates of one configuration.",
+            "",
+            "| signature | runs | git_hash | example run | patch |",
+            "|---|---|---|---|---|",
+        ]
+        for sig, info in sorted(states.items(), key=lambda kv: -len(kv[1]["runs"])):
+            out.append("| `%s` | %d | %s | `%s` | `results/code_states/%s.diff` |" % (
+                sig, len(info["runs"]), info["git"] or "?",
+                sorted(info["runs"])[0], sig))
+
+    restarted = [r for r in rows if r["group"] == "restarted"]
+    if restarted:
+        out += [
+            "",
+            "## Restarted runs (two sessions in one log)",
+            "",
+            "The log of each of these holds a first session and a second one appended",
+            "after a restart, so the reward series spans two training runs and no",
+            "`last20` is printed. Frames reached is the largest `Collected` value (the",
+            "earlier session got through a full budget) and the wall clock is the sum of",
+            "the sessions, which is why a naive first-to-last subtraction goes negative here.",
+            "",
+            "| run | sessions | frames reached | budget | wall h | code | source |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for r in sorted(restarted, key=lambda r: r["run"]):
+            out.append("| `%s` | %d | %s | %s | %s | %s/%s | `%s` |" % (
+                r["run"], r["sessions"], r["frames_reached"] or "", r["budget"] or "",
+                _fmt(r["wall_h"]), r["git_hash"] or "?", r["diff_md5"] or "?", r["log"]))
+
     out += [
         "",
         "## Excluded run directories",
@@ -468,6 +545,8 @@ def render_markdown(rows, train_dir, dir_count, date):
         "| `smoke` | %d | under %dM frames |" % (
             counts.get("smoke", 0), SMOKE_FRAMES // 1_000_000),
         "| `no_series` | %d | crashed or restarted before logging a reward |" % counts.get("no_series", 0),
+        "| `restarted` | %d | two sessions in one log; published separately above, no "
+        "reward statistic |" % counts.get("restarted", 0),
         "| `no_log` | %d | directory has a `config.json` but no `sf_log.txt`: %s |" % (
             len(no_log), ", ".join("`%s`" % n for n in no_log) or "none"),
         "| `unclassified` | %d | empty by construction: the script exits nonzero if a run "

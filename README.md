@@ -106,7 +106,7 @@ one counted step is `env_frameskip=4` engine frames), so the 50M is the same 50M
 the *metric* is what makes the two campaigns incomparable, and it is why they are
 never pooled.
 
-| Architecture | Runs | Best | Final |
+| Architecture | Seeds | Best | Final |
 |---|---|---|---|
 | GRU + HPO | 3 | 18.07 ± 2.08 | 17.66 ± 2.39 |
 | Mamba-2 HPO | 4 | 15.46 ± 1.56 | 14.45 ± 2.20 |
@@ -117,16 +117,18 @@ never pooled.
 | Perceiver | 1 | 1.97 | 0.99 |
 | Transformer | 1 | 1.01 | 0.57 |
 
-The only statistically tested comparison in that report is GRU+HPO vs GRU
-baseline: t = −4.107, p = 0.0034 (3 vs 7 runs) — **`[UNVERIFIED]`**, no data
-behind it is in this repository. Everything else is descriptive.
+That report runs three tests, not one: GRU+HPO vs GRU baseline (t = −4.107,
+p = 0.0034; 3 vs 7 runs), and Mamba-2 HPO vs both GRU baseline (p = 0.189) and
+GRU+HPO (p = 0.266), i.e. Mamba-2 is *not* separable from either. All of it is
+**`[UNVERIFIED]`** here: none of that data is in this repository.
 
 ## What the two campaigns say together
 
 - At 50M frames on the cluster, every arm is within ~1.8 reward of every other and
   the intervals overlap. **No architecture wins at this budget.**
-- At 250M the GRU is ahead (24.2 over two healthy runs) while Mamba-3 is at
-  18.65 ± 1.40 and GDN at 14.98 ± 1.73. An SSM advantage is visible only in
+- At 250M the two GRU runs score 24.57 and 23.87 (they differ only in learning
+  rate, so they are *not* averaged into one arm and no ± is quoted for them),
+  while Mamba-3 is at 18.65 ± 1.40 and GDN at 14.98 ± 1.73. An SSM advantage is visible only in
   single runs at 50M (`mamba3_50m_final` 17.65, `mamba3_best_50m` 15.54) and does
   not survive at 250M, where every 3-seed SSM arm is below the GRU.
 - GDN costs 1.6× the wall clock of the GRU for a lower score (7.0 h vs 4.3 h per
@@ -163,30 +165,42 @@ read the HUD:
 | 32.0 | ![ep2](media/gru_250m_ep2.gif) |
 | 22.0 | ![ep3](media/gru_250m_ep3.gif) |
 
-`train_dir/gru_250m_baseline/checkpoint_p0/` also contains
-`best_000015260_250019840_reward_24.480.pth`, which is what the 24.57 row refers
-to (Sample Factory's `save_best_metric` snapshot at 250M frames). Those three
-episode rewards are single episodes on the training distribution, not a held-out
-evaluation — the 24.57 `last20` figure is the one to compare against.
+The release also carries `best_000015260_250019840_reward_24.480.pth`, Sample
+Factory's `save_best_metric` snapshot. Its 24.48 is that snapshot's own episode
+reward, **not** the `last20` = 24.57 of the training curve — different windows of
+different quantities, so neither should be read as the other. The three episode
+rewards in the table above are single episodes on the training distribution, not a
+held-out evaluation.
 
 Reproducing the training run itself:
 
 ```bash
 ./scripts/sample_factory_train.sh doom_benchmark 250000000 \
-  --use_rnn=True --rnn_size=512 --rnn_num_layers=1 \
+  --use_rnn=True --rnn_type=gru --rnn_size=512 --rnn_num_layers=1 \
   --batch_size=4096 --rollout=64 --recurrence=32 --gamma=0.99 \
-  --env_frameskip=4 --res_w=128 --res_h=72
+  --env_frameskip=4 --res_w=128 --res_h=72 \
+  --normalize_input=True --normalize_returns=True \
+  --learning_rate=0.000405 --exploration_loss_coeff=0.00202 \
+  --weight_decay=0.00196 --optimizer=adam --num_workers=8 \
+  --num_envs_per_worker=8 --save_best_metric=reward --save_best_after=100000
 ```
+
+(The wrapper also defaults `EXPERIMENT=DoomSOTA_<env>` and `NUM_WORKERS=20`,
+`NUM_ENVS_PER_WORKER=16`; override both, or the run is not the one above. Exact
+values, including `seed: null`, are in the released `config.json`.)
 
 ## What this does not show
 
 - **One arena, one objective.** `doom_benchmark` = `battle.cfg` deathmatch. No
   level completion, no navigation, no exit. A high score here does not mean the
-  agent can finish a Doom map; the levels live in a separate benchmark
-  (`doom_sf/bench/` in DOOM-SF) that is not part of this result set.
-- **Single-task, version-pinned.** ViZDoom 1.3.0 was what actually ran
-  (`_vizdoom.ini` headers); the lock files in the two repos disagree (1.2.4 vs
-  1.3.0). Numbers are not portable across ViZDoom versions.
+  agent can finish a Doom map. A level benchmark on real Doom maps exists, but in
+  the `DOOM-SF` repository (branch `feat/doom-bench`), not here, and it has no
+  trained agents in it yet.
+- **Single-task, version-pinned.** The runs used ViZDoom 1.3.0 with ZDoom 2.8.1+
+  (`_vizdoom.ini` header, regenerated in every run's log). The two repos pin
+  differently — `DOOM-SF` asks `vizdoom>=1.2.0` and locks **1.2.4**, `DOOM` asks
+  `>=1.3.0` and locks **1.3.0** — and both use Sample Factory 2.1.1. Numbers are
+  not portable across ViZDoom versions.
 - **Seeds are thin where it matters.** The 250M comparison is 1–3 seeds per arm,
   with one GRU configuration collapsed. No paired test is possible at n=1.
 - **No held-out evaluation protocol.** `last20` is training-time reward over the
@@ -195,9 +209,11 @@ Reproducing the training run itself:
   identity is the experiment name plus the `sf_log.txt`/`config.json` in its
   directory, with `git_hash` and the per-run `git.diff` as code provenance.
 - **The HPO trials are not published.** 168 trial directories (50 mamba3, 50 gru,
-  25 mamba2, 43 legacy numbered trials) at 10.03M frames are counted as excluded in
-  `CLUSTER_RESULTS.md` rather than reported. 22 runs under 10M frames are smokes,
-  18 crashed before logging a reward, and 0 are unclassified.
+  3 mamba2, 65 legacy `hpo_<N>_` trials) at 10.03M frames are counted as excluded
+  in `CLUSTER_RESULTS.md` rather than reported. 20 runs under 10M frames are
+  smokes, 18 crashed before logging a reward, 2 restarted mid-run (published with
+  frames and wall clock but no reward), 1 never stepped its env and is quarantined,
+  and 0 are unclassified.
 
 ## Repo layout
 

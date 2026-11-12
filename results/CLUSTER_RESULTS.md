@@ -33,12 +33,13 @@ its budget is missing from it.
 flattened size (mamba3 16960 = d_model 256 / d_state 64, mamba3 66688 =
 512 / 128).
 
-Where the code lives: the campaign ran in the `DOOM` repository. Most runs
-are on its `master` (1fa02f7), the GDN runs on `cluster/gdn` (fad9545, pushed
-pinned so the core is not only on the cluster). The uncommitted working-tree
-patch those runs shared is committed here as
-`results/working_tree_1fa02f7.diff` -- without it the per-run `git.diff` files,
-which are the only exact code record, cannot be reconstructed from the repo.
+Where the code lives: the campaign ran in the `DOOM` repository from a dirty
+`1fa02f7` checkout (and `fad9545` for the GDN runs, pinned here as branch
+`cluster/gdn`). The checkout was edited between batches, so there is no single
+working-tree patch: every distinct state is published as
+`results/code_states/<signature>.diff`, and the table below says which runs
+came from it. The `DOOM` repository alone cannot reproduce these numbers --
+the signatures differ from its `master`.
 
 ## 50M env frames
 
@@ -90,14 +91,58 @@ moved into a headline arm.
 | `gru_baseline` | 6.42 / 9.98 | 13.43M / 25.18M | 2 | 0.31 | gru/512 | 1fa02f7527/5d460f3a, 1fa02f7527/1ee49ccb | `train_dir/gru_baseline_50m/sf_log.txt`, `train_dir/gru_baseline_50m_seed42/sf_log.txt` |
 | `gru_optimized` | 9.30 / 14.31 | 8.21M / 35.90M | 2 | 0.28 | gru/512 | 1fa02f7527/5d460f3a, 1fa02f7527/1ee49ccb | `train_dir/gru_optimized_50m/sf_log.txt`, `train_dir/gru_optimized_50m_seed42/sf_log.txt` |
 
+## Code states (one patch per distinct working tree)
+
+Derived from each run's own `git.diff`, with the engine-generated
+`_vizdoom.ini` hunk removed so a launch timestamp cannot split one state
+into two. Each patch is committed as `results/code_states/<signature>.diff`.
+A signature shared by many runs means the same code with different
+arguments -- never that they are replicates of one configuration.
+
+| signature | runs | git_hash | example run | patch |
+|---|---|---|---|---|
+| `d791fabb` | 65 | 1fa02f7527 | `gru_250m_baseline` | `results/code_states/d791fabb.diff` |
+| `4a4b295e` | 53 | 1fa02f7527 | `hpo_mamba2_0_20260805_125544` | `results/code_states/4a4b295e.diff` |
+| `ebcf066c` | 27 | 1fa02f7527 | `hpo_0_20260727_215734` | `results/code_states/ebcf066c.diff` |
+| `80343fa0` | 18 | 1fa02f7527 | `hpo_0_20260728_234741` | `results/code_states/80343fa0.diff` |
+| `79d4bdd1` | 17 | 1fa02f7527 | `hpo_0_20260726_025755` | `results/code_states/79d4bdd1.diff` |
+| `5d460f3a` | 15 | 1fa02f7527 | `gru_baseline_50m` | `results/code_states/5d460f3a.diff` |
+| `225a3a28` | 12 | 1fa02f7527 | `m3_fixed_test` | `results/code_states/225a3a28.diff` |
+| `74dab16a` | 9 | fad9545db8 | `gdn_250m_seed1` | `results/code_states/74dab16a.diff` |
+| `1ee49ccb` | 9 | 1fa02f7527 | `gru_100k` | `results/code_states/1ee49ccb.diff` |
+| `d41d8cd9` | 6 | 1fa02f7527 | `gru_q100k` | `results/code_states/d41d8cd9.diff` |
+| `86d28965` | 2 | fad9545db8 | `gdn2_smoke_100k` | `results/code_states/86d28965.diff` |
+| `4583f292` | 2 | 1fa02f7527 | `hpo_0_20260726_024255` | `results/code_states/4583f292.diff` |
+| `395fd704` | 1 | 1fa02f7527 | `hpo_0_20260726_023554` | `results/code_states/395fd704.diff` |
+| `8e88def6` | 1 | 1fa02f7527 | `hpo_0_20260726_025225` | `results/code_states/8e88def6.diff` |
+| `5478083d` | 1 | 1fa02f7527 | `hpo_0_20260728_234454` | `results/code_states/5478083d.diff` |
+| `715f5f31` | 1 | 1fa02f7527 | `trial_0_20260725_180456` | `results/code_states/715f5f31.diff` |
+| `3cebef49` | 1 | 1fa02f7527 | `trial_0_20260725_213525` | `results/code_states/3cebef49.diff` |
+| `f748ac04` | 1 | 1fa02f7527 | `trial_0_20260726_022927` | `results/code_states/f748ac04.diff` |
+| `af5c6de7` | 1 | 1fa02f7527 | `trial_0_20260726_023257` | `results/code_states/af5c6de7.diff` |
+
+## Restarted runs (two sessions in one log)
+
+The log of each of these holds a first session and a second one appended
+after a restart, so the reward series spans two training runs and no
+`last20` is printed. Frames reached is the largest `Collected` value (the
+earlier session got through a full budget) and the wall clock is the sum of
+the sessions, which is why a naive first-to-last subtraction goes negative here.
+
+| run | sessions | frames reached | budget | wall h | code | source |
+|---|---|---|---|---|---|---|
+| `m3_trial_1_20260731_223057` | 2 | 50020352 | 50000000 | 1.89 | 1fa02f7527/225a3a28 | `train_dir/m3_trial_1_20260731_223057/sf_log.txt` |
+| `m3_trial_4_20260804_155155` | 2 | 50020352 | 50000000 | 3.48 | 1fa02f7527/225a3a28 | `train_dir/m3_trial_4_20260804_155155/sf_log.txt` |
+
 ## Excluded run directories
 
 | group | dirs | why |
 |---|---|---|
 | `quarantined` | 1 | never trained; each one is named below |
 | `hpo` | 168 | hyper-parameter trials at 10.03M frames (50 mamba3, 50 gru, 3 mamba2, 65 legacy `hpo_<N>_` trials), not final arms |
-| `smoke` | 22 | under 10M frames |
+| `smoke` | 20 | under 10M frames |
 | `no_series` | 18 | crashed or restarted before logging a reward |
+| `restarted` | 2 | two sessions in one log; published separately above, no reward statistic |
 | `no_log` | 3 | directory has a `config.json` but no `sf_log.txt`: `m3_trial_2_20260731_031230`, `m3_trial_3_20260801_025455`, `m3_trial_7_20260804_195138` |
 | `unclassified` | 0 | empty by construction: the script exits nonzero if a run lands here |
 
