@@ -28,6 +28,10 @@ if [[ ! -d "$TRAIN_DIR/$EXPERIMENT" ]]; then
   echo "download the released checkpoint first (see README, 'Released checkpoint')." >&2
   exit 1
 fi
+# Sample Factory resolves checkpoint_dir from cfg.train_dir at load time, so a
+# relative path breaks the moment the launcher changes directory (srun, batch
+# script). Pin it to an absolute path here.
+TRAIN_DIR="$(cd "$TRAIN_DIR" && pwd)"
 
 ARGS=(
   --env=doom_benchmark
@@ -68,4 +72,10 @@ if [[ -n "${EXTRA:-}" ]]; then
 fi
 
 echo "python -m sf_examples.vizdoom.enjoy_vizdoom ${ARGS[*]}"
+# Sample Factory 2.1.1 calls torch.load() without weights_only (learner.py
+# load_checkpoint), and torch >= 2.6 defaults that to True. The failure is
+# swallowed by a retry loop and surfaces as "'NoneType' object is not
+# subscriptable" on checkpoint_dict["model"], which reads like a missing
+# checkpoint. The env var restores the old default.
+export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 exec python -m sf_examples.vizdoom.enjoy_vizdoom "${ARGS[@]}"

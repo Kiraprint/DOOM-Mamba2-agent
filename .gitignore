@@ -17,3 +17,5 @@ _vizdoom.ini
 images/
 .venv_sf/
 train_dir/
+# release assets are published via GitHub Releases, not committed
+release/

@@ -98,18 +98,38 @@ baseline: t = −4.107, p = 0.0034 (3 vs 7 seeds). Everything else is descriptiv
 
 ## Released checkpoint
 
-`gru_250m_baseline` — the best-scoring cluster run — is published as a Sample
-Factory experiment directory on the Hub:
+[`v1-gru-250m`](https://github.com/Kiraprint/DOOM-Mamba2-agent/releases/tag/v1-gru-250m)
+is the best-scoring cluster run, published as an ordinary Sample Factory
+experiment directory (`config.json` + `checkpoint_p0/*.pth`, 67 MB):
 
 ```bash
-# one command, exact env id and flags from the training config
-huggingface-cli download Kiraprint/doom-sf-gru-250m --local-dir ./train_dir
+./scripts/install_checkpoint.sh                  # -> ./train_dir/gru_250m_baseline
 EXPERIMENT=gru_250m_baseline ./scripts/eval_sf_checkpoint.sh
+SAVE_VIDEO=1 NO_RENDER=1 ./scripts/eval_sf_checkpoint.sh   # record an episode
 ```
+
+Sample Factory 2.1.1 + ViZDoom 1.3.0 on Linux. The eval script exports
+`TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1`: SF 2.1.1 calls `torch.load()` without
+`weights_only`, and torch ≥ 2.6 then refuses this checkpoint inside a retry loop
+that swallows the error, surfacing as `'NoneType' object is not subscriptable`.
+One more gotcha, both hit while producing the gifs below: the script's
+`TRAIN_DIR` is pinned to an absolute path (SF resolves checkpoints relative to
+`cwd`), and `--save_video` shells out to a real `ffmpeg` binary.
+
+Rollouts from this checkpoint — three separate episodes, unedited, slow enough to
+read the HUD:
+
+| episode reward | clip |
+|---|---|
+| 30.0 | ![ep1](media/gru_250m_ep1.gif) |
+| 32.0 | ![ep2](media/gru_250m_ep2.gif) |
+| 22.0 | ![ep3](media/gru_250m_ep3.gif) |
 
 `train_dir/gru_250m_baseline/checkpoint_p0/` also contains
 `best_000015260_250019840_reward_24.480.pth`, which is what the 24.57 row refers
-to (Sample Factory's `save_best_metric` snapshot at 250M frames).
+to (Sample Factory's `save_best_metric` snapshot at 250M frames). Those three
+episode rewards are single episodes on the training distribution, not a held-out
+evaluation — the 24.57 `last20` figure is the one to compare against.
 
 Reproducing the training run itself:
 
@@ -146,7 +166,9 @@ Reproducing the training run itself:
 results/CLUSTER_RESULTS.md   generated tables: per-seed values, code identity, source log per row
 results/runs.csv             one row per run: 242 rows, metrics + provenance + log path
 scripts/agg_runs.py          regenerates both from train_dir/*/sf_log.txt
+scripts/install_checkpoint.sh fetch the v1-gru-250m release into train_dir/
 scripts/eval_sf_checkpoint.sh one-command eval / video capture for a released checkpoint
+media/*.gif                  three recorded episodes (rewards 30.0 / 32.0 / 22.0)
 scripts/sample_factory_train.sh, sample_factory_enjoy.sh   SF training / viewing
 ppo_train.py, mamba_model.py, eval.py   standalone Mamba-2 PPO (separate from the SF campaign)
 ```
