@@ -4,6 +4,7 @@ Run: python scripts/test_agg_runs.py
 Three review cycles found parsing defects here that no test would have missed, so
 these pin the shapes that actually occur in the campaign's logs, not hypotheticals.
 """
+import json
 import os
 import tempfile
 import unittest
@@ -29,7 +30,8 @@ def collected(ts, frames, fps=1000.0):
 
 
 def reward(ts, value):
-    return "[%s][1] Avg episode reward: [(0, [%.2f])]\n" % (ts, value)
+    # The real line quotes the value: Avg episode reward: [(0, '13.6')]
+    return "[%s][1] Avg episode reward: [(0, '%.3f')]\n" % (ts, value)
 
 
 class SessionTest(unittest.TestCase):
@@ -84,6 +86,45 @@ class SessionTest(unittest.TestCase):
         )
         _, _, _, fps, _, _ = agg_runs.parse_log(os.path.join(run, "sf_log.txt"))
         self.assertEqual(fps, 9949.4)
+
+
+class CollectTest(unittest.TestCase):
+    """collect() is what the tables are built from: the reward guard lives there."""
+
+    def _row(self, text, name="run"):
+        d = tempfile.mkdtemp()
+        run = os.path.join(d, name)
+        os.makedirs(run)
+        with open(os.path.join(run, "config.json"), "w") as f:
+            json.dump({"train_for_env_steps": 1000, "rnn_type": "gru",
+                       "rnn_size": 512, "seed": None}, f)
+        with open(os.path.join(run, "sf_log.txt"), "w") as f:
+            f.write(text)
+        return agg_runs.collect(d)[0]
+
+    def test_reward_series_is_parsed_at_all(self):
+        row = self._row(launch("2026-09-02 19:00:00,000")
+                        + reward("2026-09-02 19:00:05,000", 1.0)
+                        + reward("2026-09-02 19:00:10,000", 3.0))
+        self.assertEqual(row["points"], 2)
+        self.assertEqual(row["last20"], 2.0)
+
+    def test_two_markers_publish_no_reward_statistic(self):
+        row = self._row(launch("2026-09-02 19:00:00,000")
+                        + reward("2026-09-02 19:00:05,000", 1.0)
+                        + collected("2026-09-02 19:10:00,000", 900)
+                        + launch("2026-09-02 20:00:00,000")
+                        + reward("2026-09-02 20:00:05,000", 7.0)
+                        + collected("2026-09-02 20:10:00,000", 900))
+        self.assertEqual(row["sessions"], 2)
+        self.assertEqual(row["group"], "restarted")
+        self.assertEqual(row["last20"], "")
+        self.assertEqual(row["final"], "")
+        self.assertEqual(row["best"], "")
+        self.assertEqual(row["fps"], "")
+        # 10 min + 10 min, and deliberately *not* the 1.17 h a first-to-last
+        # subtraction would give (19:00 -> 20:10).
+        self.assertAlmostEqual(row["wall_h"], 0.33, places=2)
 
 
 class GuardTest(unittest.TestCase):

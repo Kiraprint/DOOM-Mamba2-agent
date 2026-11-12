@@ -124,9 +124,13 @@ arguments -- never that they are replicates of one configuration.
 
 ## Restarted runs (several training sessions in one log)
 
-The HPO driver appended each relaunch to the first trial's log, and every
-relaunch wrote its config into a *different* `train_dir` -- so one file here
-holds several separate runs and no `last20` over it means anything. Sessions
+Two shapes produce these. In the HPO trials the driver appended each
+relaunch to the first trial's log, and each relaunch wrote its config into a
+*different* `train_dir` (`m3_trial_1` into `m3_trial_2`, `m3_trial_3`, ...), so
+one file is a concatenation of separate runs with different hyper-parameters;
+in the two smoke runs below the process simply restarted into its own
+directory, so the file holds two attempts at one configuration. Either way
+neither a `last20` nor a single step count describes the file. Sessions
 are counted from the `Saving configuration to ...` line each launch prints,
 not from a backwards step in `Collected`: a relaunch that repeats the
 previous count leaves no trace in that series. Frames reached is the largest

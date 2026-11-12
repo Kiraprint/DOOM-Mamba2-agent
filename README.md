@@ -43,11 +43,11 @@ fall out of it.
 
 | arm | per-run last20 | n | mean ± s.d. | rnn | wall |
 |---|---|---|---|---|---|
-| `gru_hpov4` | 15.10 / 14.12 / 15.31 | 3 | **14.84 ± 0.63** | gru/512 | 0.8 h |
-| `mamba3_large` | 13.89 / 13.48 / 16.07 | 3 | **14.48 ± 1.39** | mamba3/66688 | 1.3 h |
-| `mamba3_hpov4` | 13.30 / 13.35 / 14.31 | 3 | **13.66 ± 0.57** | mamba3/16960 | 0.7 h |
-| `gdn` | 14.67 / 17.31 / 11.04 / 12.63 / 9.76 | 5 | **13.08 ± 2.99** | gdn/73728 | 1.4 h |
-| `gru_baseline` | 13.60 | 1 | **13.60** | gru/512 | 1.1 h |
+| `gru_hpov4` | 15.10 / 14.12 / 15.31 | 3 | **14.84 ± 0.63** | gru/512 | 0.84 h |
+| `mamba3_large` | 13.89 / 13.48 / 16.07 | 3 | **14.48 ± 1.39** | mamba3/66688 | 1.35 h |
+| `mamba3_hpov4` | 13.30 / 13.35 / 14.31 | 3 | **13.66 ± 0.57** | mamba3/16960 | 0.72 h |
+| `gdn` | 14.67 / 17.31 / 11.04 / 12.63 / 9.76 | 5 | **13.08 ± 2.99** | gdn/73728 | 1.41 h |
+| `gru_baseline` | 13.60 | 1 | **13.60** | gru/512 | 1.13 h |
 
 The plain GRU baseline is a single run because it is the only one of its three
 directories that reached the 50M budget in one session: `gru_baseline_50m_m`
@@ -59,12 +59,12 @@ were killed early and are listed, not averaged, in `CLUSTER_RESULTS.md`.
 
 | arm | per-run last20 | n | mean ± s.d. | rnn | wall |
 |---|---|---|---|---|---|
-| `gru_baseline` | 24.57 | 1 | **24.57** | gru/512 | 4.3 h |
-| `gru_v4_lr3` | 23.87 | 1 | **23.87** | gru/512 | 4.3 h |
-| `mamba3_hpov4` | 20.08 / 18.58 / 17.29 | 3 | **18.65 ± 1.40** | mamba3/16960 | 3.4 h |
-| `gdn` | 13.70 / 16.96 / 14.29 | 3 | **14.98 ± 1.73** | gdn/73728 | 7.0 h |
-| `mamba3_best` | 14.26 | 1 | **14.26** | mamba3/66688 | 6.6 h |
-| `gru_v4` | 5.35* | 1 | **5.35*** | gru/512 | 4.0 h |
+| `gru_baseline` | 24.57 | 1 | **24.57** | gru/512 | 4.28 h |
+| `gru_v4_lr3` | 23.87 | 1 | **23.87** | gru/512 | 4.28 h |
+| `mamba3_hpov4` | 20.08 / 18.58 / 17.29 | 3 | **18.65 ± 1.40** | mamba3/16960 | 3.45 h |
+| `gdn` | 13.70 / 16.96 / 14.29 | 3 | **14.98 ± 1.73** | gdn/73728 | 7.01 h |
+| `mamba3_best` | 14.26 | 1 | **14.26** | mamba3/66688 | 6.63 h |
+| `gru_v4` | 5.35* | 1 | **5.35*** | gru/512 | 4.02 h |
 
 `mamba3_best` is a single run with its own LR schedule (`lr` 3.26e-4,
 `exploration_loss_coeff` 0.0015, `weight_decay` 1.5e-4) and `rnn_size` 66688, so it
@@ -131,8 +131,8 @@ GRU+HPO (p = 0.266), i.e. Mamba-2 is *not* separable from either. All of it is
   while Mamba-3 is at 18.65 ± 1.40 and GDN at 14.98 ± 1.73. An SSM advantage is visible only in
   single runs at 50M (`mamba3_50m_final` 17.65, `mamba3_best_50m` 15.54) and does
   not survive at 250M, where every 3-seed SSM arm is below the GRU.
-- GDN costs 1.6× the wall clock of the GRU for a lower score (7.0 h vs 4.3 h per
-  250M run).
+- GDN costs 1.64× the wall clock of the GRU for a lower score (7.01 h vs 4.28 h
+  per 250M run; the table above prints the two runs' means at two decimals).
 - The single-GPU study's GRU+HPO result (17.66 final) is **not** comparable to the
   cluster's 50M rows (metric differs), and must not be quoted as one.
 
