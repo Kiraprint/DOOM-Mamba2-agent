@@ -44,9 +44,9 @@ Exact values: `gru_250m_baseline/config.json`.
 ## Evaluate
 
 ```bash
-huggingface-cli download Kiraprint/doom-sf-gru-250m --local-dir ./train_dir
-EXPERIMENT=gru_250m_baseline SAVE_VIDEO=1 NO_RENDER=1 \
-  ./scripts/eval_sf_checkpoint.sh
+# from the GitHub release (this Hub copy is a mirror of it)
+./scripts/install_checkpoint.sh
+EXPERIMENT=gru_250m_baseline NO_RENDER=1 ./scripts/eval_sf_checkpoint.sh
 ```
 
 Requires Sample Factory 2.1.1 + ViZDoom 1.3.0 (`pip install 'sample-factory[vizdoom]'`)
@@ -60,6 +60,6 @@ single episodes on the training distribution, not a held-out evaluation.
 
 ## Limitations
 
-One arena (`doom_bankmark` = deathmatch score, no level completion), one action
+One arena (`doom_benchmark` = deathmatch score, no level completion), one action
 space, one seed, no held-out eval split. Do not read this as navigation or
 level-solving competence.
